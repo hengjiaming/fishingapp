@@ -1,0 +1,75 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+eggs/
+wheels/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Virtual environments
+.env
+.venv/
+env/
+venv/
+ENV/
+fa_venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IDEs & editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs and database
+*.log
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Model checkpoints and weights
+*.pt
+*.pth
+checkpoint*.pt
+
+# TensorBoard
+runs/
+
+# Data folders (raw or large files)
+data/
+dataset/
+Images/raw_images/
+Images/cropped/
+Images/numbered/
+
+# Mac/Linux swap or temp
+*~
