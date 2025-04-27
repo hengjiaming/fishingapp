@@ -37,7 +37,7 @@ def get_config(section: str, key: str, env_var: str, default=None):
     return val
 
 # ─── 1) Database URL ──────────────────────────────────────────────────────────
-# DATABASE_URL = get_config("database", "url", "DATABASE_URL")
+MONGODB_URI = get_config("database", "mongodb_uri", "MONGODB_URI")
 
 # ─── 2) HuggingFace model info ────────────────────────────────────────────────
 HF_REPO_ID  = get_config("model", "repo_id",  "MODEL_REPO_ID")
@@ -96,15 +96,9 @@ val_tfms = transforms.Compose([
 
 # ─── 5. DB HELPERS (MongoDB version) ───────────────────────────────────────────
 @st.cache_resource
-def get_mongo_client():
-    uri = get_config("database","mongodb_uri","MONGODB_URI")
-    return MongoClient(uri)
-
-@st.cache_resource
 def get_collection():
-    uri    = os.getenv("MONGODB_URI")
-    client = MongoClient(uri)
-    db     = client["fishingapp"]
+    client = MongoClient(MONGODB_URI)
+    db     = client.get_default_database()
     return db["catches"]
 
 col = get_collection()
