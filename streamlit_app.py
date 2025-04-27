@@ -2,7 +2,9 @@
 import os
 import io
 import json
-import psycopg2
+from pymongo import MongoClient
+from bson.binary import Binary
+from bson.objectid import ObjectId
 import timm
 import streamlit as st
 from PIL import Image
@@ -42,7 +44,7 @@ HF_REPO_ID  = get_config("model", "repo_id",  "MODEL_REPO_ID")
 HF_FILENAME = get_config("model", "filename", "MODEL_FILENAME", default="checkpoint_best_2.pt")
 HF_TOKEN    = get_config("model", "hf_token",  "HF_TOKEN", default=None)
 
-# ─── 3) Download & cache your checkpoint ─────────────────────────────────────
+# ─── 3) Download & cache checkpoint ─────────────────────────────────────
 @st.cache_resource
 def fetch_model():
     return hf_hub_download(
@@ -70,14 +72,17 @@ with open(MAPPING_PATH, "r") as f:
  # ─── 3. LOAD MODEL ────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model():
-    with st.spinner("⏳ Loading model…"):
-        ckpt = torch.load(MODEL_PATH, map_location=DEVICE)
-        state_dict = ckpt.get("model_state_dict", ckpt)
-        net = timm.create_model("efficientnet_b0",
-                                pretrained=False,
-                                num_classes=len(species_names))
-        net.load_state_dict(state_dict)
-        return net.to(DEVICE).eval()
+    ckpt       = torch.load(MODEL_PATH, map_location=DEVICE)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    net = timm.create_model("efficientnet_b0",
+                            pretrained=False,
+                            num_classes=len(species_names))
+    net.load_state_dict(state_dict)
+    net.to(DEVICE)
+    if DEVICE.type=="cuda":
+        net.half()                # ← cast all weights to FP16
+    net.eval()
+    return net
 
 model = load_model()
 
@@ -89,60 +94,72 @@ val_tfms = transforms.Compose([
     transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
 ])
 
-# ─── 5. DB HELPERS ─────────────────────────────────────────────────────────────
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+# ─── 5. DB HELPERS (MongoDB version) ───────────────────────────────────────────
+@st.cache_resource
+def get_mongo_client():
+    uri = get_config("database","mongodb_uri","MONGODB_URI")
+    return MongoClient(uri)
 
-def init_table():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS catches (
-                id          SERIAL PRIMARY KEY,
-                img_data    BYTEA       NOT NULL,
-                species     TEXT        NOT NULL,
-                lure        TEXT,
-                size        REAL,
-                location    TEXT,
-                condition   TEXT,
-                favourite   BOOLEAN,
-                created_at  TIMESTAMP   DEFAULT NOW()
-            );
-            """)
-    # no need to commit() in `with` block
+@st.cache_resource
+def get_collection():
+    uri    = os.getenv("MONGODB_URI")
+    client = MongoClient(uri)
+    db     = client["fishingapp"]      # ← your database name here
+    return db["catches"]               # ← your collection name
 
-init_table()
+col = get_collection()
 
 def insert_catch(img_bytes, species, lure, size, loc, cond, fav):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-            INSERT INTO catches (img_data, species, lure, size, location, condition, favourite)
-            VALUES (%s,%s,%s,%s,%s,%s,%s);
-            """, (psycopg2.Binary(img_bytes), species, lure, size, loc, cond, fav))
+    doc = {
+      "img":       Binary(img_bytes),
+      "species":   species,
+      "lure":      lure,
+      "size":      size,
+      "location":  loc,
+      "condition": cond,
+      "favourite": fav,
+      "created_at":  __import__("datetime").datetime.utcnow()
+    }
+    col.insert_one(doc)
 
 def fetch_past():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, img_data, species, lure, size, location, condition, favourite, created_at
-                  FROM catches
-                 ORDER BY created_at DESC
-            """)
-            return cur.fetchall()
+    # returns list of dicts
+    docs = col.find().sort("created_at", -1)
+    # convert to list of tuples matching your UI unpack
+    out = []
+    for d in docs:
+        out.append((
+           str(d["_id"]),
+           d["img"],
+           d["species"],
+           d.get("lure",""),
+           d.get("size",0.0),
+           d.get("location",""),
+           d.get("condition",""),
+           d.get("favourite",False),
+           d["created_at"]
+        ))
+    return out
 
 def update_catch(catch_id, species, lure, size, loc, cond, fav):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE catches
-                   SET species=%s, lure=%s, size=%s, location=%s, condition=%s, favourite=%s
-                 WHERE id=%s
-            """, (species, lure, size, loc, cond, fav, catch_id))
+    col.update_one(
+      {"_id": ObjectId(catch_id)},
+      {"$set": {
+         "species":   species,
+         "lure":      lure,
+         "size":      size,
+         "location":  loc,
+         "condition": cond,
+         "favourite": fav
+      }}
+    )
 
 # ─── 6. PREDICTION ─────────────────────────────────────────────────────────────
 def predict_species(image: Image.Image):
-    x = val_tfms(image).unsqueeze(0).to(DEVICE)
+    x = val_tfms(image).unsqueeze(0)
+    if DEVICE.type=="cuda":
+        x = x.half()
+    x = x.to(DEVICE)
     with torch.no_grad():
         logits = model(x)
         probs = F.softmax(logits, dim=1)
@@ -183,7 +200,7 @@ else:
     for (cid, img_data, species, lure, size, location, condition, favourite, ts) in rows:
         with st.expander(f"#{species} from {ts:%Y‑%m‑%d %H:%M}", expanded=False):
             # show the saved image
-            buf = BytesIO(img_data.tobytes())
+            buf = BytesIO(img_data)
             img = Image.open(buf)
             st.image(img, width=500)
 
