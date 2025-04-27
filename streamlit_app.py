@@ -37,7 +37,7 @@ def get_config(section: str, key: str, env_var: str, default=None):
     return val
 
 # ─── 1) Database URL ──────────────────────────────────────────────────────────
-DATABASE_URL = get_config("database", "url", "DATABASE_URL")
+# DATABASE_URL = get_config("database", "url", "DATABASE_URL")
 
 # ─── 2) HuggingFace model info ────────────────────────────────────────────────
 HF_REPO_ID  = get_config("model", "repo_id",  "MODEL_REPO_ID")
@@ -104,8 +104,8 @@ def get_mongo_client():
 def get_collection():
     uri    = os.getenv("MONGODB_URI")
     client = MongoClient(uri)
-    db     = client["fishingapp"]      # ← your database name here
-    return db["catches"]               # ← your collection name
+    db     = client["fishingapp"]
+    return db["catches"]
 
 col = get_collection()
 
